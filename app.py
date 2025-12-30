@@ -13,19 +13,34 @@ nltk.download('punkt_tab')
 stop_words = set(stopwords.words("english"))
 lemmatizer = WordNetLemmatizer()
 
-# ---------- KNOWLEDGE BASE ----------
-responses = {
-    "admission": "Admissions start in May every year. Visit the official website for online applications.",
-    "fee": "The annual fee for the AI & ML department is ₹1,50,000.",
-    "principal": "Our principal is Dr. K. Venkatesh.",
-    "college": "This is Sri Venkateswara College of Engineering and Technology.",
-    "placement": "Our placement cell partners with TCS, Infosys, and Wipro.",
-    "courses": "We offer B.Tech, M.Tech, and MBA programs.",
-    "ai": "The AI lab is located in Block B, 2nd floor with GPU systems.",
-    "library": "The library is open from 8 AM to 8 PM on weekdays.",
-    "canteen": "The canteen is open from 9 AM to 5 PM.",
-    "hostel": "Hostel facilities are available with Wi-Fi and 24/7 security."
-}
+# ---------- KNOWLEDGE BASE (multi-word support, loaded once) ----------
+import json
+from pathlib import Path
+
+kb_path = Path(__file__).parent / "knowledge.json"
+_kb_entries = {}  # maps tuple(key_tokens) -> response
+_kb_max_key_len = 1
+
+# Load KB once at startup
+try:
+    with kb_path.open(encoding="utf-8") as kb_file:
+        responses = json.load(kb_file)
+except FileNotFoundError:
+    responses = {}
+
+entries = {}
+max_len = 1
+for k, v in responses.items():
+    # tokenize the key, lemmatize and keep only alnum tokens
+    key_tokens = [lemmatizer.lemmatize(t) for t in word_tokenize(k.lower()) if t.isalnum() and t not in stop_words]
+    if not key_tokens:
+        continue
+    key_tuple = tuple(key_tokens)
+    entries[key_tuple] = v
+    max_len = max(max_len, len(key_tuple))
+
+_kb_entries = entries
+_kb_max_key_len = max_len
 
 # ---------- FUNCTIONS ----------
 def preprocess(text):
@@ -38,13 +53,32 @@ def preprocess(text):
 
 def chatbot_response(user_input):
     tokens = preprocess(user_input)
-    matches = [k for k in responses if k in tokens]
-
-    if matches:
-        confidence = round(len(matches) / len(tokens), 2)
-        return responses[matches[0]], confidence
-    else:
+    if not tokens:
         return "Sorry, I don't have information about that. Please contact the admin office.", 0.0
+
+    # Try to find the longest matching n-gram in the KB entries
+    # prioritize longer matches (more specific)
+    match = None
+    match_len = 0
+    for n in range(_kb_max_key_len, 0, -1):
+        if n > len(tokens):
+            continue
+        for i in range(len(tokens) - n + 1):
+            ngram = tuple(tokens[i : i + n])
+            if ngram in _kb_entries:
+                match = (_kb_entries[ngram], n)
+                match_len = n
+                break
+        if match:
+            break
+
+    if match:
+        response_text, matched_tokens = match
+        confidence = round(matched_tokens / len(tokens), 2)
+        return response_text, confidence
+
+    # fallback: no match
+    return "Sorry, I don't have information about that. Please contact the admin office.", 0.0
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="College Chatbot", layout="centered")
